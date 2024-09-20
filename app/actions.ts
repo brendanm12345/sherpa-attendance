@@ -8,6 +8,8 @@ import { redirect } from "next/navigation";
 export const signUpAction = async (formData: FormData) => {
   const email = formData.get("email")?.toString();
   const password = formData.get("password")?.toString();
+  const first_name = formData.get("first_name")?.toString();
+  const last_name = formData.get("last_name")?.toString();
   const supabase = createClient();
   const origin = headers().get("origin");
 
@@ -20,6 +22,11 @@ export const signUpAction = async (formData: FormData) => {
     password,
     options: {
       emailRedirectTo: `${origin}/auth/callback`,
+      data: {
+        first_name: first_name,
+        last_name: last_name,
+        role: "school_admin",
+      }
     },
   });
 

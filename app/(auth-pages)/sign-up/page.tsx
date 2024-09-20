@@ -17,7 +17,7 @@ export default function Signup({ searchParams }: { searchParams: Message }) {
 
   return (
     <>
-      <form className="flex flex-col min-w-64 max-w-64 mx-auto">
+      <form className="flex flex-col min-w-72 max-w-72 mx-auto">
         <h1 className="text-2xl font-medium">Sign up</h1>
         <p className="text-sm text text-foreground">
           Already have an account?{" "}
@@ -26,6 +26,10 @@ export default function Signup({ searchParams }: { searchParams: Message }) {
           </Link>
         </p>
         <div className="flex flex-col gap-2 [&>input]:mb-3 mt-8">
+          <Label htmlFor="first_name">First Name</Label>
+          <Input name="first_name" placeholder="Sally" required />
+          <Label htmlFor="last_name">Last Name</Label>
+          <Input name="last_name" placeholder="Seastar" required />
           <Label htmlFor="email">Email</Label>
           <Input name="email" placeholder="you@example.com" required />
           <Label htmlFor="password">Password</Label>

@@ -27,7 +27,7 @@ SENDBLUE_API_SECRET = os.environ.get("SENDBLUE_API_SECRET")
 # Global variables
 BACKEND_BASE_URL = os.environ.get("BACKEND_BASE_URL")
 INITIAL_MESSAGE_TEMPLATE = "Hello, our records show that {student_name} was absent today. Can you please provide a reason for their absence?"
-AUTO_APPROVE = False
+AUTO_APPROVE = True
 
 # Pydantic models
 
@@ -45,6 +45,8 @@ class AttendanceReport(BaseModel):
     date: date
     school_id: str
     absences: List[Absence]
+
+# correct this based on the new schema
 
 
 class Participant(BaseModel):
@@ -64,6 +66,12 @@ class Message(BaseModel):
     was_downgraded: Optional[bool] = None
     sendblue_message_handle: Optional[str] = None
 
+
+class AIResponse(BaseModel):
+    rfa: Optional[str]
+    next_action: str
+    response_text: str
+
 # Helper Functions
 
 
@@ -73,8 +81,8 @@ def get_attendance_report() -> AttendanceReport:
         date=date.today(),
         school_id="62566731-2ddc-475c-9778-a6106928d2a0",
         absences=[
-            Absence(id="1", student_id="S001", student_name="John Doe", date=date.today(
-            ), rfa="Unexplained", guardian_phone="+16509245188"),
+            # Absence(id="1", student_id="S001", student_name="John Doe", date=date.today(
+            # ), rfa="Unexplained", guardian_phone="+16509245188"),
             Absence(id="2", student_id="S002", student_name="Jane Smith", date=date.today(
             ), rfa="Excused - Doctor's appointment", guardian_phone="+16509245188"),
             Absence(id="3", student_id="S003", student_name="Bob Johnson", date=date.today(
@@ -121,6 +129,9 @@ async def sendblue_send_message(phone_number: str, content: str) -> dict:
 
 
 def create_conversation(student_id: str, absence_id: str, school_id: str) -> str:
+    """
+    Creates a conversation record in the database and returns the ID of the new record.
+    """
     conversation_data = {
         "topic": "Absence Inquiry",
         "student_id": student_id,
@@ -134,6 +145,10 @@ def create_conversation(student_id: str, absence_id: str, school_id: str) -> str
 
 
 def create_conversation_participant(participant: Participant) -> str:
+    """
+    Creates a conversation participant record in the database and returns the ID of the new record.
+    TODO: this should really be a get_or_create function so we don't create duplicates. if the type field that's passed in is "admin" and a user_id is passed in then we should see if the participant exists and if no create it. if the type is "guardian" and there is a guardian id we should double check that it exists ...etc 
+    """
     participant_data = {
         "conversation_id": participant.conversation_id,
         "conversation_role": participant.conversation_role,
@@ -148,6 +163,9 @@ def create_conversation_participant(participant: Participant) -> str:
 
 
 def create_message(message: Message) -> str:
+    """
+    Creates a message record in the database and returns the ID of the new record.
+    """
     message_data = {
         "conversation_id": message.conversation_id,
         "content": message.content,
@@ -161,27 +179,32 @@ def create_message(message: Message) -> str:
 
 
 async def initiate_conversation(absence: Absence, school_id: str, auto_approve: bool) -> dict:
+    """
+    Initiates a conversation with the guardian of a student for an unexplained absence. This will deliver the message via Sendblue if auto_approve is True, otherwise it will mark it as AWAITING_APPROVAL.
+    """
     initial_message = INITIAL_MESSAGE_TEMPLATE.format(
         student_name=absence.student_name)
     sendblue_response = None
 
     if auto_approve:
+        # try sending the message first becuase if it fails we don't want to create the conversation and participants
         try:
             sendblue_response = await sendblue_send_message(absence.guardian_phone, initial_message)
         except HTTPException as e:
             print(f"Failed to send message via Sendblue: {str(e)}")
             raise e
 
-    # If we're here, either auto_approve is False or the Sendblue message was sent successfully
     conversation_id = create_conversation(
         absence.student_id, absence.id, school_id)
 
+    # TODO: this isn't really an AI partiticipant necessarily, its just the genral admin for the school
     ai_participant = Participant(
         conversation_id=conversation_id,
-        conversation_role="attendance_officer",
-        first_name="Attendance",
-        last_name="Officer"
+        conversation_role="attendance_officer",  # should be type: admin
+        first_name="Attendance",  # should be the school name "Crystal Lake"
+        last_name="Officer"  # should be the rest of the school name "High School"
     )
+    # so the below function should try to get the participant using the conversation_id, the participant type and the phone number if there is one maybe
     ai_participant_id = create_conversation_participant(ai_participant)
 
     guardian_participant = Participant(
@@ -209,6 +232,41 @@ async def initiate_conversation(absence: Absence, school_id: str, auto_approve: 
         "message_id": message_id,
         "status": message.status
     }
+
+
+async def ai_process_conversation(conversation_history: List[dict], participant_roles: List[dict]) -> AIResponse:
+    prompt = f"""
+    Given the following conversation history and participant roles, please analyze the conversation and provide:
+    1. A reason for absence (RFA) if one has been made clear. If not clear, respond with null.
+    2. A next action to be taken in this conversation (either 'Action Needed' or 'In Progress' category).
+    3. A text response to send to the recipient based on the above choices.
+
+    Conversation History:
+    {json.dumps(conversation_history)}
+
+    Participant Roles:
+    {json.dumps(participant_roles)}
+
+    Please respond in JSON format with the following structure:
+    {{
+        "rfa": "excused - sick" or null,
+        "next_action": "Action Needed - add specialist to chat",
+        "response_text": "I'm sorry to hear that. Could you provide more details about the illness?"
+    }}
+    """
+
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": "You are an AI assistant helping to process school absence conversations."},
+            {"role": "user", "content": prompt}
+        ]
+    )
+
+    ai_response = json.loads(response.choices[0].message.content)
+    return AIResponse(**ai_response)
+
+
 # Endpoints
 
 
@@ -297,6 +355,73 @@ async def sendblue_callback(callback_data: dict):
         raise HTTPException(status_code=404, detail="Message not found")
 
     return {"status": "Message status updated"}
+
+
+@app.post("/process_response")
+async def process_response(conversation_id: str, sender_role: str, message_content: str):
+    # Add the new message to the conversation
+    # TODO: think about how to get the participant ID
+    new_message = Message(
+        conversation_id=conversation_id,
+        content=message_content,
+        sender_id=sender_role,  # This should be the participant ID, not the role
+        status="DELIVERED"
+    )
+    create_message(new_message)
+
+    # Fetch the conversation details
+    conversation = supabase.table("conversations").select(
+        "*").eq("id", conversation_id).single().execute()
+    if not conversation.data:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    # Check if the conversation has an RFA
+    if not conversation.data.get("rfa"):
+        # Fetch conversation history
+        messages = supabase.table("messages").select(
+            "*").eq("conversation_id", conversation_id).order("created_at").execute()
+
+        # Fetch participant roles
+        participants = supabase.table("conversation_participants").select(
+            "*").eq("conversation_id", conversation_id).execute()
+
+        # Process with AI
+        ai_response = await ai_process_conversation(messages.data, participants.data)
+
+        # Update conversation with AI response
+        update_data = {"status": "in_progress"}
+        if ai_response.rfa:
+            update_data["rfa"] = ai_response.rfa
+        if ai_response.next_action.startswith("Action Needed"):
+            update_data["status"] = ai_response.next_action
+
+        supabase.table("conversations").update(
+            update_data).eq("id", conversation_id).execute()
+
+        # Create AI response message
+        ai_message = Message(
+            conversation_id=conversation_id,
+            content=ai_response.response_text,
+            sender_id="AI_SYSTEM",  # You might want to create a special participant for AI
+            status="AWAITING_APPROVAL" if not AUTO_APPROVE else "QUEUED"
+        )
+        ai_message_id = create_message(ai_message)
+
+        if AUTO_APPROVE:
+            # Send the message via Sendblue
+            guardian = next(
+                p for p in participants.data if p["conversation_role"] == "guardian")
+            await sendblue_send_message(guardian["phone_number"], ai_response.response_text)
+
+            # Update the message status
+            supabase.table("messages").update(
+                {"status": "SENT"}).eq("id", ai_message_id).execute()
+
+    else:
+        # If RFA exists, notify human to respond (placeholder for now)
+        print("TODO: Notify human to respond to the conversation")
+
+    return {"status": "Message processed successfully"}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

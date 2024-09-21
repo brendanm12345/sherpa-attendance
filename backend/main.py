@@ -3,11 +3,12 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 import httpx
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Literal
 from supabase import create_client, Client
 from datetime import date
 import os
 from dotenv import load_dotenv
+import openai
 
 # Initialize FastAPI app
 app = FastAPI()
@@ -27,7 +28,10 @@ SENDBLUE_API_SECRET = os.environ.get("SENDBLUE_API_SECRET")
 # Global variables
 BACKEND_BASE_URL = os.environ.get("BACKEND_BASE_URL")
 INITIAL_MESSAGE_TEMPLATE = "Hello, our records show that {student_name} was absent today. Can you please provide a reason for their absence?"
-AUTO_APPROVE = True
+AUTO_APPROVE = False
+
+# OpenAI configuration
+openai.api_key = os.environ.get("OPENAI_API_KEY")
 
 # Pydantic models
 
@@ -38,6 +42,7 @@ class Absence(BaseModel):
     student_name: str
     date: date
     rfa: str
+    guardian_name: str
     guardian_phone: str
 
 
@@ -46,22 +51,11 @@ class AttendanceReport(BaseModel):
     school_id: str
     absences: List[Absence]
 
-# correct this based on the new schema
-
-
-class Participant(BaseModel):
-    conversation_id: str
-    conversation_role: str
-    first_name: str = None
-    last_name: str = None
-    phone_number: str = None
-    user_id: str = None
-
 
 class Message(BaseModel):
     conversation_id: str
     content: str
-    sender_id: str
+    sender_type: Literal["guardian", "admin"]
     status: str
     was_downgraded: Optional[bool] = None
     sendblue_message_handle: Optional[str] = None
@@ -81,12 +75,10 @@ def get_attendance_report() -> AttendanceReport:
         date=date.today(),
         school_id="62566731-2ddc-475c-9778-a6106928d2a0",
         absences=[
-            # Absence(id="1", student_id="S001", student_name="John Doe", date=date.today(
-            # ), rfa="Unexplained", guardian_phone="+16509245188"),
-            Absence(id="2", student_id="S002", student_name="Jane Smith", date=date.today(
-            ), rfa="Excused - Doctor's appointment", guardian_phone="+16509245188"),
-            Absence(id="3", student_id="S003", student_name="Bob Johnson", date=date.today(
-            ), rfa="Unexplained", guardian_phone="+16509245188"),
+            Absence(id="2", student_id="S002", student_name="Jane Smith", date=date.today(),
+                    rfa="Excused - Doctor's appointment", guardian_name="Sally Smith", guardian_phone="+16509245188"),
+            Absence(id="3", student_id="S003", student_name="Bob Johnson", date=date.today(),
+                    rfa="Unexplained", guardian_name="Jessy Johnson", guardian_phone="+16509245188"),
         ]
     )
 
@@ -96,6 +88,7 @@ async def sendblue_send_message(phone_number: str, content: str) -> dict:
     payload = json.dumps({
         "number": phone_number,
         "content": content,
+        # our ngrok reverse proxy to http://127.0.0.1:8000
         "status_callback": f"https://b5cb-173-13-131-249.ngrok-free.app/sendblue_callback"
     })
 
@@ -128,48 +121,45 @@ async def sendblue_send_message(phone_number: str, content: str) -> dict:
                 status_code=500, detail=f"Error sending message: {error_detail}")
 
 
-def create_conversation(student_id: str, absence_id: str, school_id: str) -> str:
-    """
-    Creates a conversation record in the database and returns the ID of the new record.
-    """
+def get_or_create_guardian(phone_number: str, school_id: str, first_name: str, last_name: str) -> str:
+    # Try to find an existing guardian
+    existing_guardian = supabase.table("guardians").select(
+        "*").eq("phone_number", phone_number).eq("school_id", school_id).execute()
+
+    if existing_guardian.data:
+        return existing_guardian.data[0]['id']
+
+    # If not found, create a new guardian
+    new_guardian = supabase.table("guardians").insert({
+        "phone_number": phone_number,
+        "school_id": school_id,
+        "first_name": first_name,
+        "last_name": last_name
+    }).execute()
+
+    return new_guardian.data[0]['id']
+
+
+def create_conversation(student_id: str, absence_id: str, school_id: str, guardian_id: str) -> str:
     conversation_data = {
         "topic": "Absence Inquiry",
         "student_id": student_id,
         "school_id": school_id,
         "status": "in_progress",
         "absence_id": absence_id,
+        "guardian_id": guardian_id,
+        "user_id": None  # Leave this null for the MVP
     }
     result = supabase.table("conversations").insert(
         conversation_data).execute()
     return result.data[0]['id']
 
 
-def create_conversation_participant(participant: Participant) -> str:
-    """
-    Creates a conversation participant record in the database and returns the ID of the new record.
-    TODO: this should really be a get_or_create function so we don't create duplicates. if the type field that's passed in is "admin" and a user_id is passed in then we should see if the participant exists and if no create it. if the type is "guardian" and there is a guardian id we should double check that it exists ...etc 
-    """
-    participant_data = {
-        "conversation_id": participant.conversation_id,
-        "conversation_role": participant.conversation_role,
-        "first_name": participant.first_name,
-        "last_name": participant.last_name,
-        "phone_number": participant.phone_number,
-        "user_id": participant.user_id
-    }
-    result = supabase.table("conversation_participants").insert(
-        participant_data).execute()
-    return result.data[0]['id']
-
-
 def create_message(message: Message) -> str:
-    """
-    Creates a message record in the database and returns the ID of the new record.
-    """
     message_data = {
         "conversation_id": message.conversation_id,
         "content": message.content,
-        "sender_id": message.sender_id,
+        "sender_type": message.sender_type,
         "status": message.status,
         "was_downgraded": message.was_downgraded,
         "sendblue_message_handle": message.sendblue_message_handle
@@ -179,47 +169,34 @@ def create_message(message: Message) -> str:
 
 
 async def initiate_conversation(absence: Absence, school_id: str, auto_approve: bool) -> dict:
-    """
-    Initiates a conversation with the guardian of a student for an unexplained absence. This will deliver the message via Sendblue if auto_approve is True, otherwise it will mark it as AWAITING_APPROVAL.
-    """
     initial_message = INITIAL_MESSAGE_TEMPLATE.format(
         student_name=absence.student_name)
     sendblue_response = None
 
     if auto_approve:
-        # try sending the message first becuase if it fails we don't want to create the conversation and participants
         try:
             sendblue_response = await sendblue_send_message(absence.guardian_phone, initial_message)
         except HTTPException as e:
             print(f"Failed to send message via Sendblue: {str(e)}")
             raise e
 
+    # Get or create guardian
+    guardian_first_name, guardian_last_name = absence.guardian_name.split(
+        " ", 1)
+    guardian_id = get_or_create_guardian(
+        absence.guardian_phone, school_id, guardian_first_name, guardian_last_name)
+
+    # Create conversation
     conversation_id = create_conversation(
-        absence.student_id, absence.id, school_id)
+        absence.student_id, absence.id, school_id, guardian_id)
 
-    # TODO: this isn't really an AI partiticipant necessarily, its just the genral admin for the school
-    ai_participant = Participant(
-        conversation_id=conversation_id,
-        conversation_role="attendance_officer",  # should be type: admin
-        first_name="Attendance",  # should be the school name "Crystal Lake"
-        last_name="Officer"  # should be the rest of the school name "High School"
-    )
-    # so the below function should try to get the participant using the conversation_id, the participant type and the phone number if there is one maybe
-    ai_participant_id = create_conversation_participant(ai_participant)
-
-    guardian_participant = Participant(
-        conversation_id=conversation_id,
-        conversation_role="guardian",
-        phone_number=absence.guardian_phone
-    )
-    create_conversation_participant(guardian_participant)
-
+    # Create message
     message = Message(
         conversation_id=conversation_id,
         content=initial_message,
-        sender_id=ai_participant_id,
+        sender_type="admin",  # Added missing comma
         status="AWAITING_APPROVAL" if not auto_approve else sendblue_response.get(
-            "status"),
+            "status", "QUEUED"),
         was_downgraded=sendblue_response.get(
             "was_downgraded") if auto_approve else None,
         sendblue_message_handle=sendblue_response.get(
@@ -266,7 +243,6 @@ async def ai_process_conversation(conversation_history: List[dict], participant_
     ai_response = json.loads(response.choices[0].message.content)
     return AIResponse(**ai_response)
 
-
 # Endpoints
 
 
@@ -277,6 +253,9 @@ async def root():
 
 @app.post("/initiate_conversations")
 async def initiate_conversations(background_tasks: BackgroundTasks):
+    """
+    Download the attendance report and initiate conversations for unexplained absences
+    """
     attendance_report = get_attendance_report()
     initiated_conversations = []
 
@@ -299,37 +278,51 @@ async def initiate_conversations(background_tasks: BackgroundTasks):
 
 @app.post("/approve_and_send_message/{message_id}")
 async def approve_and_send_message(message_id: str):
-    # Fetch the message from the database
+    # Fetch the message
     message_result = supabase.table("messages").select(
-        "*").eq("id", message_id).execute()
+        "*").eq("id", message_id).single().execute()
     if not message_result.data:
         raise HTTPException(status_code=404, detail="Message not found")
 
-    message = Message(**message_result.data[0])
+    message = Message(**message_result.data)
 
     if message.status != "AWAITING_APPROVAL":
         raise HTTPException(
             status_code=400, detail="Message is not in AWAITING_APPROVAL status")
 
-    # Fetch the conversation and guardian's phone number
+    # Fetch the conversation
     conversation_result = supabase.table("conversations").select(
-        "*").eq("id", message.conversation_id).execute()
+        "*").eq("id", message.conversation_id).single().execute()
     if not conversation_result.data:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    guardian_result = supabase.table("conversation_participants").select(
-        "*").eq("conversation_id", message.conversation_id).eq("conversation_role", "guardian").execute()
+    guardian_id = conversation_result.data.get("guardian_id")
+    if not guardian_id:
+        raise HTTPException(
+            status_code=404, detail="Guardian not associated with conversation")
+
+    # Fetch the guardian
+    guardian_result = supabase.table("guardians").select(
+        "phone_number").eq("id", guardian_id).single().execute()
     if not guardian_result.data:
         raise HTTPException(status_code=404, detail="Guardian not found")
 
-    guardian_phone = guardian_result.data[0]["phone_number"]
+    guardian_phone = guardian_result.data["phone_number"]
+    if not guardian_phone:
+        raise HTTPException(
+            status_code=404, detail="Guardian phone number not found")
 
-    # Send the message via Sendblue
-    sendblue_response = await sendblue_send_message(guardian_phone, message.content)
+    # Send the message
+    try:
+        sendblue_response = await sendblue_send_message(guardian_phone, message.content)
+    except HTTPException as e:
+        # Log the error and re-raise
+        print(f"Failed to send message via Sendblue: {str(e)}")
+        raise
 
-    # Update the message status in the database
+    # Update the message status
     updated_message = supabase.table("messages").update({
-        "status": sendblue_response.get("status"),
+        "status": sendblue_response.get("status", "SENT"),
         "was_downgraded": sendblue_response.get("was_downgraded"),
         "sendblue_message_handle": sendblue_response.get("message_handle")
     }).eq("id", message_id).execute()
@@ -339,7 +332,6 @@ async def approve_and_send_message(message_id: str):
 
 @app.post("/sendblue_callback")
 async def sendblue_callback(callback_data: dict):
-    # Update the message status in the database based on the callback data
     message_handle = callback_data.get("message_handle")
     new_status = callback_data.get("status")
 
@@ -358,37 +350,28 @@ async def sendblue_callback(callback_data: dict):
 
 
 @app.post("/process_response")
-async def process_response(conversation_id: str, sender_role: str, message_content: str):
-    # Add the new message to the conversation
-    # TODO: think about how to get the participant ID
+async def process_response(conversation_id: str, message_content: str):
     new_message = Message(
         conversation_id=conversation_id,
         content=message_content,
-        sender_id=sender_role,  # This should be the participant ID, not the role
+        sender_type="guardian",
         status="DELIVERED"
     )
     create_message(new_message)
 
-    # Fetch the conversation details
     conversation = supabase.table("conversations").select(
         "*").eq("id", conversation_id).single().execute()
     if not conversation.data:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    # Check if the conversation has an RFA
     if not conversation.data.get("rfa"):
-        # Fetch conversation history
         messages = supabase.table("messages").select(
             "*").eq("conversation_id", conversation_id).order("created_at").execute()
-
-        # Fetch participant roles
         participants = supabase.table("conversation_participants").select(
             "*").eq("conversation_id", conversation_id).execute()
 
-        # Process with AI
         ai_response = await ai_process_conversation(messages.data, participants.data)
 
-        # Update conversation with AI response
         update_data = {"status": "in_progress"}
         if ai_response.rfa:
             update_data["rfa"] = ai_response.rfa
@@ -398,22 +381,27 @@ async def process_response(conversation_id: str, sender_role: str, message_conte
         supabase.table("conversations").update(
             update_data).eq("id", conversation_id).execute()
 
-        # Create AI response message
+        admin_participant = next(
+            p for p in participants.data if p["type"] == "admin")
         ai_message = Message(
             conversation_id=conversation_id,
             content=ai_response.response_text,
-            sender_id="AI_SYSTEM",  # You might want to create a special participant for AI
+            sender_type="admin",
             status="AWAITING_APPROVAL" if not AUTO_APPROVE else "QUEUED"
         )
         ai_message_id = create_message(ai_message)
 
         if AUTO_APPROVE:
-            # Send the message via Sendblue
             guardian = next(
-                p for p in participants.data if p["conversation_role"] == "guardian")
-            await sendblue_send_message(guardian["phone_number"], ai_response.response_text)
+                p for p in participants.data if p["type"] == "guardian")
+            guardian_data = supabase.table("guardians").select("phone_number").eq(
+                "id", guardian["guardian_id"]).single().execute()
+            if not guardian_data.data:
+                raise HTTPException(
+                    status_code=404, detail="Guardian phone number not found")
 
-            # Update the message status
+            await sendblue_send_message(guardian_data.data["phone_number"], ai_response.response_text)
+
             supabase.table("messages").update(
                 {"status": "SENT"}).eq("id", ai_message_id).execute()
 

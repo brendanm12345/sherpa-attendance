@@ -10,10 +10,12 @@ import os
 from dotenv import load_dotenv
 from openai import OpenAI
 
-app = FastAPI()
-client = OpenAI(api_key="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")
-
 load_dotenv()
+
+app = FastAPI()
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+client = OpenAI(api_key=OPENAI_API_KEY)
+
 
 # Initialize Supabase client
 url: str = os.environ.get("SUPABASE_URL")
@@ -367,14 +369,23 @@ async def process_response(payload: dict):
     if not sender_phone or not to_phone or not message_content or not sendblue_message_handle:
         raise HTTPException(status_code=400, detail="Invalid webhook payload")
 
-    # Find the most recent active conversation for this sender
-    conversation = supabase.table("conversations").select("*").eq("guardian_phone", sender_phone).eq(
-        "status", "in_progress").order("created_at", desc=True).limit(1).execute()
+   # Find the guardian based on the sender's phone number
+    guardian = supabase.table("guardians").select("id, school_id").eq(
+        "phone_number", sender_phone).single().execute()
+    if not guardian.data:
+        raise HTTPException(status_code=500, detail="Guardian not found")
+
+    guardian_id = guardian.data['id']
+    school_id = guardian.data['school_id']
+
+    # Find the most recent active conversation for this guardian
+    conversation = supabase.table("conversations").select("*").eq("guardian_id", guardian_id).eq(
+        "school_id", school_id).eq("status", "in_progress").order("created_at", desc=True).limit(1).execute()
 
     if not conversation.data:
         # Handle case where no active conversation is found
         raise HTTPException(
-            status_code=404, detail="No active conversation found for this sender")
+            status_code=404, detail="No active conversation found for this guardian")
 
     conversation_id = conversation.data[0]['id']
 
@@ -392,7 +403,7 @@ async def process_response(payload: dict):
     conversation = supabase.table("conversations").select(
         "*").eq("id", conversation_id).single().execute()
     if not conversation.data:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+        raise HTTPException(status_code=500, detail="Conversation not found")
 
     if not conversation.data.get("rfa"):
         """
@@ -427,25 +438,25 @@ async def process_response(payload: dict):
                 "*").eq("id", conversation_id).single().execute()
             if not conversation_result.data:
                 raise HTTPException(
-                    status_code=404, detail="Conversation not found")
+                    status_code=500, detail="Conversation not found")
 
             # Get guardian_id from conversation
             guardian_id = conversation_result.data.get("guardian_id")
             if not guardian_id:
                 raise HTTPException(
-                    status_code=404, detail="Guardian not associated with conversation")
+                    status_code=500, detail="Guardian not associated with conversation")
 
             # Get the guardian (phone number col only) from guardian_id
             guardian_result = supabase.table("guardians").select(
                 "phone_number").eq("id", guardian_id).single().execute()
             if not guardian_result.data:
                 raise HTTPException(
-                    status_code=404, detail="Guardian not found")
+                    status_code=500, detail="Guardian not found")
 
             guardian_phone = guardian_result.data["phone_number"]
             if not guardian_phone:
                 raise HTTPException(
-                    status_code=404, detail="Guardian phone number not found")
+                    status_code=500, detail="Guardian phone number not found")
 
             # Send the message
             try:
@@ -467,10 +478,10 @@ async def process_response(payload: dict):
             sendblue_message_handle=sendblue_response.get(
                 "message_handle") if AUTO_APPROVE else None
         )
-        ai_message = create_message(ai_message)
+        ai_message_id = create_message(ai_message)
         return {
             "conversation_id": conversation_id,
-            "message_id": ai_message,
+            "message_id": ai_message_id,
             "status": ai_message.status
         }
 

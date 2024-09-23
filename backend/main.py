@@ -2,16 +2,16 @@ import json
 import uvicorn
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
 from supabase import create_client, Client
 from datetime import date
 import os
 from dotenv import load_dotenv
-import openai
+from openai import OpenAI
 
-# Initialize FastAPI app
 app = FastAPI()
+client = OpenAI(api_key="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")
 
 load_dotenv()
 
@@ -27,11 +27,9 @@ SENDBLUE_API_SECRET = os.environ.get("SENDBLUE_API_SECRET")
 
 # Global variables
 BACKEND_BASE_URL = os.environ.get("BACKEND_BASE_URL")
+NGROK_BASE_URL = os.environ.get("NGROK_BASE_URL")
 INITIAL_MESSAGE_TEMPLATE = "Hello, our records show that {student_name} was absent today. Can you please provide a reason for their absence?"
 AUTO_APPROVE = False
-
-# OpenAI configuration
-openai.api_key = os.environ.get("OPENAI_API_KEY")
 
 # Pydantic models
 
@@ -61,10 +59,16 @@ class Message(BaseModel):
     sendblue_message_handle: Optional[str] = None
 
 
-class AIResponse(BaseModel):
-    rfa: Optional[str]
-    next_action: str
-    response_text: str
+class AIResponseSchema(BaseModel):
+    rfa: Optional[str] = Field(
+        None, description="Reason for absence, if clear. Examples: 'excused - sick', 'unexcused - travel'")
+    next_action: Literal["In Progress - AI continue conversation in search of RFA",
+                         "Action Needed - have a specialist take it from here",
+                         "Action Needed - mark as completed",
+                         "Action Needed - have a human take it from here"] = Field(..., description="The next action to be taken in the conversation")
+    response_content: str = Field(...,
+                                  description="The response content to send to the recipient")
+
 
 # Helper Functions
 
@@ -89,7 +93,7 @@ async def sendblue_send_message(phone_number: str, content: str) -> dict:
         "number": phone_number,
         "content": content,
         # our ngrok reverse proxy to http://127.0.0.1:8000
-        "status_callback": f"https://b5cb-173-13-131-249.ngrok-free.app/sendblue_callback"
+        "status_callback": f"{NGROK_BASE_URL}/sendblue_status_callback"
     })
 
     headers = {
@@ -194,9 +198,9 @@ async def initiate_conversation(absence: Absence, school_id: str, auto_approve: 
     message = Message(
         conversation_id=conversation_id,
         content=initial_message,
-        sender_type="admin",  # Added missing comma
+        sender_type="admin",
         status="AWAITING_APPROVAL" if not auto_approve else sendblue_response.get(
-            "status", "QUEUED"),
+            "status"),
         was_downgraded=sendblue_response.get(
             "was_downgraded") if auto_approve else None,
         sendblue_message_handle=sendblue_response.get(
@@ -211,7 +215,7 @@ async def initiate_conversation(absence: Absence, school_id: str, auto_approve: 
     }
 
 
-async def ai_process_conversation(conversation_history: List[dict], participant_roles: List[dict]) -> AIResponse:
+async def ai_process_conversation(conversation_history: List[dict], conversation: dict) -> AIResponseSchema:
     prompt = f"""
     Given the following conversation history and participant roles, please analyze the conversation and provide:
     1. A reason for absence (RFA) if one has been made clear. If not clear, respond with null.
@@ -222,26 +226,28 @@ async def ai_process_conversation(conversation_history: List[dict], participant_
     {json.dumps(conversation_history)}
 
     Participant Roles:
-    {json.dumps(participant_roles)}
+    A guardian of a student who was recently absent and a school admin who reacahed out to understand why the student was absent are participating in the conversation.
 
     Please respond in JSON format with the following structure:
     {{
         "rfa": "excused - sick" or null,
         "next_action": "Action Needed - add specialist to chat",
-        "response_text": "I'm sorry to hear that. Could you provide more details about the illness?"
+        "response_content": "I'm sorry to hear that. Could you provide more details about the illness?"
     }}
     """
 
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
+    print(f"Prompt: {prompt}")
+
+    completion = client.beta.chat.completions.parse(
+        model="gpt-4o-2024-08-06",
         messages=[
             {"role": "system", "content": "You are an AI assistant helping to process school absence conversations."},
             {"role": "user", "content": prompt}
-        ]
+        ],
+        response_format=AIResponseSchema
     )
 
-    ai_response = json.loads(response.choices[0].message.content)
-    return AIResponse(**ai_response)
+    return completion.choices[0].message.parsed
 
 # Endpoints
 
@@ -322,7 +328,7 @@ async def approve_and_send_message(message_id: str):
 
     # Update the message status
     updated_message = supabase.table("messages").update({
-        "status": sendblue_response.get("status", "SENT"),
+        "status": sendblue_response.get("status"),
         "was_downgraded": sendblue_response.get("was_downgraded"),
         "sendblue_message_handle": sendblue_response.get("message_handle")
     }).eq("id", message_id).execute()
@@ -330,8 +336,9 @@ async def approve_and_send_message(message_id: str):
     return {"status": "Message approved and sent", "sendblue_response": sendblue_response}
 
 
-@app.post("/sendblue_callback")
-async def sendblue_callback(callback_data: dict):
+@app.post("/sendblue_status_callback")
+async def sendblue_status_callback(callback_data: dict):
+    # TODO: change the ngrok url for this
     message_handle = callback_data.get("message_handle")
     new_status = callback_data.get("status")
 
@@ -350,29 +357,58 @@ async def sendblue_callback(callback_data: dict):
 
 
 @app.post("/process_response")
-async def process_response(conversation_id: str, message_content: str):
+async def process_response(payload: dict):
+    print(f"Received webhook payload: {payload}")
+    sender_phone = payload.get("from_number")
+    to_phone = payload.get("to_number")
+    message_content = payload.get("content")
+    sendblue_message_handle = payload.get("message_handle")
+
+    if not sender_phone or not to_phone or not message_content or not sendblue_message_handle:
+        raise HTTPException(status_code=400, detail="Invalid webhook payload")
+
+    # Find the most recent active conversation for this sender
+    conversation = supabase.table("conversations").select("*").eq("guardian_phone", sender_phone).eq(
+        "status", "in_progress").order("created_at", desc=True).limit(1).execute()
+
+    if not conversation.data:
+        # Handle case where no active conversation is found
+        raise HTTPException(
+            status_code=404, detail="No active conversation found for this sender")
+
+    conversation_id = conversation.data[0]['id']
+
     new_message = Message(
         conversation_id=conversation_id,
         content=message_content,
         sender_type="guardian",
-        status="DELIVERED"
+        status="RECEIVED",
+        sendblue_message_handle=conversation_id
     )
+    # Create the recevied message in DB
     create_message(new_message)
 
+    # Get the conversation from conversation_id
     conversation = supabase.table("conversations").select(
         "*").eq("id", conversation_id).single().execute()
     if not conversation.data:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     if not conversation.data.get("rfa"):
+        """
+        If the conversation does not have an RFA, this means the AI should re-consider the conversation with it's new message and see it can label it with an RFA and next action.
+        """
+
+        # Get the conversation's messages using the conversation_id
         messages = supabase.table("messages").select(
             "*").eq("conversation_id", conversation_id).order("created_at").execute()
-        participants = supabase.table("conversation_participants").select(
-            "*").eq("conversation_id", conversation_id).execute()
 
-        ai_response = await ai_process_conversation(messages.data, participants.data)
+        # Pass the conversation to GPT to get RFA, next action, and response content
+        ai_response = await ai_process_conversation(messages.data, conversation.data)
+        print("Received AI response:" + str(ai_response))
 
-        update_data = {"status": "in_progress"}
+        # Update the conversation with the new RFA and status in DB
+        update_data = {"status": "In Progress"}
         if ai_response.rfa:
             update_data["rfa"] = ai_response.rfa
         if ai_response.next_action.startswith("Action Needed"):
@@ -381,32 +417,67 @@ async def process_response(conversation_id: str, message_content: str):
         supabase.table("conversations").update(
             update_data).eq("id", conversation_id).execute()
 
-        admin_participant = next(
-            p for p in participants.data if p["type"] == "admin")
-        ai_message = Message(
-            conversation_id=conversation_id,
-            content=ai_response.response_text,
-            sender_type="admin",
-            status="AWAITING_APPROVAL" if not AUTO_APPROVE else "QUEUED"
-        )
-        ai_message_id = create_message(ai_message)
-
         if AUTO_APPROVE:
-            guardian = next(
-                p for p in participants.data if p["type"] == "guardian")
-            guardian_data = supabase.table("guardians").select("phone_number").eq(
-                "id", guardian["guardian_id"]).single().execute()
-            if not guardian_data.data:
+            """
+            If auto approve is on, try sending the message via Sendblue
+            """
+
+            # Get conversation from conversation_id
+            conversation_result = supabase.table("conversations").select(
+                "*").eq("id", conversation_id).single().execute()
+            if not conversation_result.data:
+                raise HTTPException(
+                    status_code=404, detail="Conversation not found")
+
+            # Get guardian_id from conversation
+            guardian_id = conversation_result.data.get("guardian_id")
+            if not guardian_id:
+                raise HTTPException(
+                    status_code=404, detail="Guardian not associated with conversation")
+
+            # Get the guardian (phone number col only) from guardian_id
+            guardian_result = supabase.table("guardians").select(
+                "phone_number").eq("id", guardian_id).single().execute()
+            if not guardian_result.data:
+                raise HTTPException(
+                    status_code=404, detail="Guardian not found")
+
+            guardian_phone = guardian_result.data["phone_number"]
+            if not guardian_phone:
                 raise HTTPException(
                     status_code=404, detail="Guardian phone number not found")
 
-            await sendblue_send_message(guardian_data.data["phone_number"], ai_response.response_text)
+            # Send the message
+            try:
+                sendblue_response = await sendblue_send_message(guardian_phone, ai_response.response_content)
+            except HTTPException as e:
+                # Log the error and re-raise
+                print(f"Failed to send message via Sendblue: {str(e)}")
+                raise
 
-            supabase.table("messages").update(
-                {"status": "SENT"}).eq("id", ai_message_id).execute()
+        # Create message in DB
+        ai_message = Message(
+            conversation_id=conversation_id,
+            content=ai_response.response_content,
+            sender_type="admin",
+            status="AWAITING_APPROVAL" if not AUTO_APPROVE else sendblue_response.get(
+                "status"),
+            was_downgraded=sendblue_response.get(
+                "was_downgraded") if AUTO_APPROVE else None,
+            sendblue_message_handle=sendblue_response.get(
+                "message_handle") if AUTO_APPROVE else None
+        )
+        ai_message = create_message(ai_message)
+        return {
+            "conversation_id": conversation_id,
+            "message_id": ai_message,
+            "status": ai_message.status
+        }
 
     else:
-        # If RFA exists, notify human to respond (placeholder for now)
+        """
+         If the conversation already has an RFA that means that we've already escalated this to a human and they should be handling it. We'll just notify them.
+         """
         print("TODO: Notify human to respond to the conversation")
 
     return {"status": "Message processed successfully"}

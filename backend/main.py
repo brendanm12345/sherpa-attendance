@@ -1,6 +1,8 @@
+import logging
 import json
 import uvicorn
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, UploadFile, File
+from fastapi.responses import JSONResponse
 import httpx
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
@@ -9,6 +11,8 @@ from datetime import date
 import os
 from dotenv import load_dotenv
 from openai import OpenAI
+import csv
+from io import StringIO
 
 load_dotenv()
 
@@ -31,8 +35,16 @@ SENDBLUE_API_SECRET = os.environ.get("SENDBLUE_API_SECRET")
 BACKEND_BASE_URL = os.environ.get("BACKEND_BASE_URL")
 NGROK_BASE_URL = os.environ.get("NGROK_BASE_URL")
 INITIAL_MESSAGE_TEMPLATE = "Hello, our records show that {student_name} was absent today. Can you please provide a reason for their absence?"
-AUTO_APPROVE = False
+AUTO_APPROVE = True
 
+
+logger = logging.getLogger("uvicorn")
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    logger.error(f"HTTPException: {exc.status_code} - {exc.detail}")
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 # Pydantic models
 
 
@@ -260,14 +272,32 @@ async def root():
 
 
 @app.post("/initiate_conversations")
-async def initiate_conversations(background_tasks: BackgroundTasks):
+async def initiate_conversations(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     """
-    Download the attendance report and initiate conversations for unexplained absences
+    Process the uploaded CSV file and initiate conversations for unexplained absences
     """
-    attendance_report = get_attendance_report()
+    content = await file.read()
+    csv_data = content.decode('utf-8')
+    csv_reader = csv.DictReader(StringIO(csv_data))
+
+    attendance_report = AttendanceReport(
+        date=date.today(), school_id="", absences=[])
     initiated_conversations = []
 
-    for absence in attendance_report.absences:
+    for row in csv_reader:
+        absence = Absence(
+            # Using student_id as absence id for simplicity
+            id=row['student_id'],
+            student_id=row['student_id'],
+            student_name=row['student_name'],
+            date=date.fromisoformat(row['date']),
+            rfa=row['rfa'],
+            guardian_name=row['guardian_name'],
+            guardian_phone=row['guardian_phone']
+        )
+        attendance_report.absences.append(absence)
+        attendance_report.school_id = row['school_id']
+
         if absence.rfa == "Unexplained":
             background_tasks.add_task(
                 initiate_conversation,
@@ -369,18 +399,18 @@ async def process_response(payload: dict):
     if not sender_phone or not to_phone or not message_content or not sendblue_message_handle:
         raise HTTPException(status_code=400, detail="Invalid webhook payload")
 
-   # Find the guardian based on the sender's phone number
+    # Find the guardian based on the sender's phone number
     guardian = supabase.table("guardians").select("id, school_id").eq(
         "phone_number", sender_phone).single().execute()
     if not guardian.data:
-        raise HTTPException(status_code=500, detail="Guardian not found")
+        raise HTTPException(status_code=404, detail="Guardian not found")
 
     guardian_id = guardian.data['id']
     school_id = guardian.data['school_id']
 
     # Find the most recent active conversation for this guardian
     conversation = supabase.table("conversations").select("*").eq("guardian_id", guardian_id).eq(
-        "school_id", school_id).eq("status", "in_progress").order("created_at", desc=True).limit(1).execute()
+        "school_id", school_id).order("created_at", desc=True).limit(1).execute()
 
     if not conversation.data:
         # Handle case where no active conversation is found
@@ -403,7 +433,7 @@ async def process_response(payload: dict):
     conversation = supabase.table("conversations").select(
         "*").eq("id", conversation_id).single().execute()
     if not conversation.data:
-        raise HTTPException(status_code=500, detail="Conversation not found")
+        raise HTTPException(status_code=404, detail="Conversation not found")
 
     if not conversation.data.get("rfa"):
         """
@@ -438,25 +468,25 @@ async def process_response(payload: dict):
                 "*").eq("id", conversation_id).single().execute()
             if not conversation_result.data:
                 raise HTTPException(
-                    status_code=500, detail="Conversation not found")
+                    status_code=404, detail="Conversation not found")
 
             # Get guardian_id from conversation
             guardian_id = conversation_result.data.get("guardian_id")
             if not guardian_id:
                 raise HTTPException(
-                    status_code=500, detail="Guardian not associated with conversation")
+                    status_code=404, detail="Guardian not associated with conversation")
 
             # Get the guardian (phone number col only) from guardian_id
             guardian_result = supabase.table("guardians").select(
                 "phone_number").eq("id", guardian_id).single().execute()
             if not guardian_result.data:
                 raise HTTPException(
-                    status_code=500, detail="Guardian not found")
+                    status_code=404, detail="Guardian not found")
 
             guardian_phone = guardian_result.data["phone_number"]
             if not guardian_phone:
                 raise HTTPException(
-                    status_code=500, detail="Guardian phone number not found")
+                    status_code=404, detail="Guardian phone number not found")
 
             # Send the message
             try:
@@ -489,7 +519,7 @@ async def process_response(payload: dict):
         """
          If the conversation already has an RFA that means that we've already escalated this to a human and they should be handling it. We'll just notify them.
          """
-        print("TODO: Notify human to respond to the conversation")
+        print("TODO: Notify notify admin that the guardian sent a new message")
 
     return {"status": "Message processed successfully"}
 

@@ -1,144 +1,138 @@
-"use client"
-import { useState, useEffect } from "react";
-import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import React from 'react'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import { ChevronDownIcon, AlertCircle } from 'lucide-react'
+
+// Define the type for a conversation based on your schema
+type Conversation = {
+  id: string
+  latestMessage: {
+    content: string
+    sender: {
+      name: string
+      relation: string
+    }
+    timestamp: string
+  }
+  student: {
+    name: string
+  }
+  topic: string
+  status: 'in_progress' | 'action_needed' | 'completed'
+  reasonForAbsence: string
+}
+
+// Mock data based on the schema
+const conversations: Conversation[] = [
+  {
+    id: '1',
+    latestMessage: {
+      content: "Thank you for letting me know and I'm really sorry to hear that. It's crucial that J...",
+      sender: {
+        name: "Stacy Spencer",
+        relation: "Jamie's mother"
+      },
+      timestamp: "4:14 PM"
+    },
+    student: {
+      name: "Jamie Spencer"
+    },
+    topic: "Absent Monday, 9/12",
+    status: "action_needed",
+    reasonForAbsence: "Excused - Bullying"
+  },
+  {
+    id: '2',
+    latestMessage: {
+      content: "Hi Marcus! It's Crystal Springs Middle School. We noticed Shelly wasn't at scho...",
+      sender: {
+        name: "Marcus Anthony",
+        relation: "Shelly's father"
+      },
+      timestamp: "4:14 PM"
+    },
+    student: {
+      name: "Shelly Anthony"
+    },
+    topic: "Absent Monday, 9/11",
+    status: "action_needed",
+    reasonForAbsence: "Excused - Bullying"
+  },
+  // Add more mock data as needed
+]
 
 export default function Conversations() {
-  const [file, setFile] = useState(null);
-  const [message, setMessage] = useState<{ type: string, content: string } | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [conversations, setConversations] = useState([]);
-  const supabase = createClientComponentClient();
-
-  useEffect(() => {
-    // Fetch initial conversations
-    fetchConversations();
-
-    // Set up real-time subscription
-    const channel = supabase
-      .channel('conversations')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, handleConversationChange)
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
-
-  const fetchConversations = async () => {
-    const { data, error } = await supabase
-      .from('conversations')
-      .select(`
-        id,
-        status,
-        rfa,
-        guardians (first_name, last_name),
-        messages (content)
-      `)
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      console.error('Error fetching conversations:', error);
-    } else {
-      setConversations(data);
-    }
-  };
-
-  const handleConversationChange = (payload) => {
-    console.log('Conversation change:', payload);
-    fetchConversations(); // Refetch all conversations for simplicity
-  };
-
-  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    if (event.target.files) {
-      setFile(event.target.files[0]);
-    }
-  };
-
-  const handleUpload = async () => {
-    if (!file) {
-      setMessage({ type: "error", content: "Please select a file to upload" });
-      return;
-    }
-
-    setIsLoading(true);
-    setMessage(null);
-
-    const formData = new FormData();
-    formData.append("file", file);
-
-    try {
-      const response = await fetch("http://127.0.0.1:8000/initiate_conversations", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to initiate conversations");
-      }
-
-      const result = await response.json();
-      setMessage({
-        type: "success",
-        content: `Initiated ${result.initiated_conversations.length} conversations`
-      });
-    } catch (error: any) {
-      setMessage({ type: "error", content: error.message });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   return (
-    <div className="flex-1 w-full flex flex-col gap-6 p-6">
-      <h1 className="text-2xl font-bold">Conversations</h1>
-
-      <div className="flex justify-between items-center">
-        <div className="flex items-center gap-4">
-          <Input type="file" accept=".csv" onChange={handleFileChange} className="w-64" />
-          <Button onClick={handleUpload} disabled={isLoading}>
-            {isLoading ? "Uploading..." : "Upload CSV"}
-          </Button>
+    <div className='flex flex-col p-6'>
+      {/* Header */}
+      <div className='flex flex-col gap-2 mb-6'>
+        <div className='flex flex-row flex-1 justify-between'>
+          <h1 className='text-3xl'>Conversations</h1>
+          {/* Search bar */}
+          <Input className='rounded-full bg-secondary max-w-80 border-none' placeholder='Search' />
+        </div>
+        {/* Filters */}
+        <div className='flex flex-row gap-2'>
+          <Button variant='secondary' className='rounded-full border-none'>In Progress</Button>
+          <Button variant='secondary' className='rounded-full border-none'>Action Needed</Button>
+          <Button variant='secondary' className='rounded-full border-none'>Completed</Button>
         </div>
       </div>
-
-      <Card>
-        <CardContent className="p-6">
-          {message ? (
-            <p className={`text-sm ${message.type === "error" ? "text-red-500" : "text-green-500"}`}>
-              {message.content}
-            </p>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              Upload a CSV file to initiate conversations
-            </p>
-          )}
-        </CardContent>
-      </Card>
-
+      {/* Table */}
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Guardian Name</TableHead>
             <TableHead>Latest Message</TableHead>
-            <TableHead>RFA</TableHead>
-            <TableHead>Status</TableHead>
+            <TableHead>Student</TableHead>
+            <TableHead>Topic</TableHead>
+            <TableHead>Conversation Status</TableHead>
+            <TableHead>Reason for Absence</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {conversations.map((conversation) => (
             <TableRow key={conversation.id}>
-              <TableCell>{`${conversation.guardians.first_name} ${conversation.guardians.last_name}`}</TableCell>
-              <TableCell>{conversation.messages[0]?.content || 'No messages yet'}</TableCell>
-              <TableCell>{conversation.rfa || 'Not set'}</TableCell>
-              <TableCell>{conversation.status}</TableCell>
+              <TableCell>
+                <div className="flex items-center">
+                  <div className="min-w-[50px] h-[50px] square rounded-full bg-green-100 flex items-center justify-center mr-3">
+                    {conversation.latestMessage.sender.name.charAt(0)}
+                  </div>
+                  <div>
+                    <div className='flex flex-row gap-2 items-center'>
+                      <div className="font-semibold">{conversation.latestMessage.sender.name}</div>
+                      <div className="text-sm bg-secondary py-1 px-2 rounded-md">{conversation.latestMessage.sender.relation}</div>
+                    </div>
+                    <div className="text-sm truncate max-w-80">{conversation.latestMessage.content}</div>
+                  </div>
+                </div>
+              </TableCell>
+              <TableCell className='truncate'>{conversation.student.name}</TableCell>
+              <TableCell className='truncate'>{conversation.topic}</TableCell>
+              <TableCell>
+                <div className="flex items-center">
+                  <AlertCircle className="w-4 h-4 mr-2 text-yellow-500" />
+                  <span className='truncate'>{conversation.status.replace('_', ' ')}</span>
+                  <ChevronDownIcon className="w-4 h-4 ml-2" />
+                </div>
+              </TableCell>
+              <TableCell>
+                <div className="flex items-center">
+                  <span className='truncate'>{conversation.reasonForAbsence}</span>
+                  <ChevronDownIcon className="w-4 h-4 ml-2" />
+                </div>
+              </TableCell>
             </TableRow>
           ))}
         </TableBody>
       </Table>
     </div>
-  );
+  )
 }

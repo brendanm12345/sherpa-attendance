@@ -7,6 +7,9 @@ import { GeistSans } from "geist/font/sans";
 import { ThemeProvider } from "next-themes";
 import Link from "next/link";
 import "./globals.css";
+import { MountainSnow, Send } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Toaster } from "@/components/ui/toaster";
 
 const defaultUrl = process.env.VERCEL_URL
   ? `https://${process.env.VERCEL_URL}`
@@ -32,39 +35,57 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
-          <main className="min-h-screen flex flex-col items-center">
-            <div className="flex-1 w-full flex flex-col gap-20 items-center">
-              <nav className="w-full flex justify-center border-b border-b-foreground/10 h-16">
-                <div className="w-full max-w-5xl flex justify-between items-center p-3 px-5 text-sm">
-                  <div className="flex gap-5 items-center font-semibold">
-                    <Link href={"/"}>Next.js Supabase Starter</Link>
-                    <div className="flex items-center gap-2">
-                      <DeployButton />
-                    </div>
+          <main className="min-h-screen flex flex-row h-full">
+            {/* sidbar */}
+            <nav className="flex flex-col justify-between items-start border-r border-b-foreground/10 bg-accent">
+              {/* top */}
+              <div className="flex flex-col p-6 text-sm gap-6 w-full">
+                <div className="flex gap-2 items-center font-semibold">
+                  <MountainSnow size={20} />
+                  <Link href={"/"}>Sherpa</Link>
+                </div>
+                <div className="flex flex-col gap-2 w-full">
+                  {/* Section Header */}
+                  <p className="opacity-50">
+                    Attendance
+                  </p>
+                  {/* Section Links */}
+                  <div>
+                    <Button variant="secondary" className="w-full">
+                      <Link href={"/"} className="flex flex-row gap-2 w-full items-start">
+                        <Send size={20} />
+                        Conversations
+                      </Link>
+                    </Button>
                   </div>
+                </div>
+              </div>
+              {/* bottom */}
+              <div className="flex flex-col p-6 text-sm">
+                <div className="bg-white border border-b-foreground/10 rounded-md p-3">
                   {!hasEnvVars ? <EnvVarWarning /> : <HeaderAuth />}
                 </div>
-              </nav>
-              <div className="flex flex-col gap-20 max-w-5xl p-5">
+              </div>
+            </nav>
+            {/* Main Section */}
+            <div className="flex-1 flex flex-col">
+              {/* Header */}
+              <div className="p-6 border-b border-b-foreground/10 flex flex-row justify-between items-center" >
+                <div className="flex flex-row gap-2">
+                  <h2>Palo Alto Unified School District | </h2>
+                  <h2 className="opacity-50">
+                    Crystal Springs Middle School
+                  </h2>
+                </div>
+                <ThemeSwitcher />
+              </div>
+              {/* Page Body */}
+              <div className="flex flex-col w-full">
                 {children}
               </div>
-
-              <footer className="w-full flex items-center justify-center border-t mx-auto text-center text-xs gap-8 py-16">
-                <p>
-                  Powered by{" "}
-                  <a
-                    href="https://supabase.com/?utm_source=create-next-app&utm_medium=template&utm_term=nextjs"
-                    target="_blank"
-                    className="font-bold hover:underline"
-                    rel="noreferrer"
-                  >
-                    Supabase
-                  </a>
-                </p>
-                <ThemeSwitcher />
-              </footer>
             </div>
           </main>
+          <Toaster />
         </ThemeProvider>
       </body>
     </html>

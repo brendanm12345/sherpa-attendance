@@ -1,7 +1,9 @@
+from typing import Literal, Optional
 import logging
 import json
 import uvicorn
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import httpx
 from pydantic import BaseModel, Field
@@ -34,11 +36,19 @@ SENDBLUE_API_SECRET = os.environ.get("SENDBLUE_API_SECRET")
 # Global variables
 BACKEND_BASE_URL = os.environ.get("BACKEND_BASE_URL")
 NGROK_BASE_URL = os.environ.get("NGROK_BASE_URL")
-INITIAL_MESSAGE_TEMPLATE = "Hello, our records show that {student_name} was absent today. Can you please provide a reason for their absence?"
+INITIAL_MESSAGE_TEMPLATE = "Hi there! This is Crystal Springs Middle School. We noticed that {student_name} was not able to make it to school today. Can you please provide a reason for their absence? Also please let us know how we can help. Thanks!"
 AUTO_APPROVE = True
 
 
 logger = logging.getLogger("uvicorn")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.exception_handler(HTTPException)
@@ -74,15 +84,43 @@ class Message(BaseModel):
 
 
 class AIResponseSchema(BaseModel):
-    rfa: Optional[str] = Field(
-        None, description="Reason for absence, if clear. Examples: 'excused - sick', 'unexcused - travel'")
-    next_action: Literal["In Progress - AI continue conversation in search of RFA",
-                         "Action Needed - have a specialist take it from here",
-                         "Action Needed - mark as completed",
-                         "Action Needed - have a human take it from here"] = Field(..., description="The next action to be taken in the conversation")
+    rfa: Optional[Literal[
+        None,
+        "Excused - Sick",
+        "Excused - Medical appointment",
+        "Excused - Travel",
+        "Excused - Family emergency",
+        "Excused - Bereavement",
+        "Excused - Religious observance",
+        "Excused - School-approved activity",
+        # "Excused - Legal or court appearance",
+        "Excused - Severe weather or natural disaster",
+        "Excused - Mental health day",
+        "Excused - Therapy or counseling appointment",
+        "Excused - College visit",
+        "Excused - Military duty (for family member)",
+        "Excused - Cultural observance",
+        "Unexcused - Sick (without proper notification)",
+        "Unexcused - Travel (non-approved)",
+        "Unexcused - Overslept",
+        "Unexcused - Transportation issues",
+        "Unexcused - Skipping class",
+        "Unexcused - Family vacation (non-approved)",
+        "Unexcused - Work (non-school related)",
+        "Unexcused - Forgot to attend online class",
+        "Unexcused - Technology issues (for remote learning)",
+        "Unexcused - Misunderstanding of schedule"
+    ]] = Field(None, description="Reason for absence, if clear.")
+
+    next_action: Literal[
+        "In Progress - AI Assistant still searching for RFA",
+        "Action Needed - pass to specialist",
+        "Action Needed - pass to attendance officer",
+        "Action Needed - review & mark as completed"
+    ] = Field(..., description="The next action to be taken in the conversation")
+
     response_content: str = Field(...,
                                   description="The response content to send to the recipient")
-
 
 # Helper Functions
 
@@ -245,9 +283,17 @@ async def ai_process_conversation(conversation_history: List[dict], conversation
     Please respond in JSON format with the following structure:
     {{
         "rfa": "excused - sick" or null,
-        "next_action": "Action Needed - add specialist to chat",
+        "next_action": "Action Needed - review & mark as completed",
         "response_content": "I'm sorry to hear that. Could you provide more details about the illness?"
     }}
+
+    Here are some helpful tips and guidelines:
+    - Be friendly and empathetic in your responses.
+    - If you decide that the rfa is "excused - [anything]", the next_action should typically be "Action Needed - review & mark as completed".
+    - If the guardian provides a clear rfa but you're unsure whether it should be excused or unexcused, you can set the next_action to "Action Needed - pass to attendance officer".
+    - If you decide to escalate the conversation to the attendance officer or a specialist, you should let the guardian know that you will let the attendance officer / specialist know and that they will be in touch soon.
+    - If users ask about how to inform the school about future absences, you can instruct them to send a text message to this phone number.
+    - Please be pretty concise in the response_content since these will be sent as text messages and avoid repeating yourself too much.
     """
 
     print(f"Prompt: {prompt}")
@@ -399,9 +445,13 @@ async def process_response(payload: dict):
     if not sender_phone or not to_phone or not message_content or not sendblue_message_handle:
         raise HTTPException(status_code=400, detail="Invalid webhook payload")
 
+    print("Sender phone: " + sender_phone)
+    normalized_sender_phone = sender_phone.lstrip('+')
+    print("Normalized sender phone: " + normalized_sender_phone)
+
     # Find the guardian based on the sender's phone number
     guardian = supabase.table("guardians").select("id, school_id").eq(
-        "phone_number", sender_phone).single().execute()
+        "phone_number", normalized_sender_phone).single().execute()
     if not guardian.data:
         raise HTTPException(status_code=404, detail="Guardian not found")
 
@@ -435,7 +485,7 @@ async def process_response(payload: dict):
     if not conversation.data:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    if not conversation.data.get("rfa"):
+    if not conversation.data.get("rfa") or conversation.data.get("status").startswith("Action Needed"):
         """
         If the conversation does not have an RFA, this means the AI should re-consider the conversation with it's new message and see it can label it with an RFA and next action.
         """
@@ -519,7 +569,7 @@ async def process_response(payload: dict):
         """
          If the conversation already has an RFA that means that we've already escalated this to a human and they should be handling it. We'll just notify them.
          """
-        print("TODO: Notify notify admin that the guardian sent a new message")
+        print("TODO: Notify admin that the guardian sent a new message")
 
     return {"status": "Message processed successfully"}
 

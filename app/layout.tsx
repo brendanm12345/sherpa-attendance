@@ -9,6 +9,7 @@ import Link from "next/link";
 import "./globals.css";
 import { MountainSnow, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Toaster } from "@/components/ui/toaster";
 
 const defaultUrl = process.env.VERCEL_URL
   ? `https://${process.env.VERCEL_URL}`
@@ -61,13 +62,6 @@ export default function RootLayout({
               </div>
               {/* bottom */}
               <div className="flex flex-col p-6 text-sm">
-
-                <div className="flex flex-row gap-2 items-center">
-                  <p>
-                    Appearance
-                  </p>
-                  <ThemeSwitcher />
-                </div>
                 <div className="bg-white border border-b-foreground/10 rounded-md p-3">
                   {!hasEnvVars ? <EnvVarWarning /> : <HeaderAuth />}
                 </div>
@@ -76,13 +70,14 @@ export default function RootLayout({
             {/* Main Section */}
             <div className="flex-1 flex flex-col">
               {/* Header */}
-              <div className="p-6 border-b border-b-foreground/10" >
+              <div className="p-6 border-b border-b-foreground/10 flex flex-row justify-between items-center" >
                 <div className="flex flex-row gap-2">
                   <h2>Palo Alto Unified School District | </h2>
                   <h2 className="opacity-50">
                     Crystal Springs Middle School
                   </h2>
                 </div>
+                <ThemeSwitcher />
               </div>
               {/* Page Body */}
               <div className="flex flex-col w-full">
@@ -90,6 +85,7 @@ export default function RootLayout({
               </div>
             </div>
           </main>
+          <Toaster />
         </ThemeProvider>
       </body>
     </html>

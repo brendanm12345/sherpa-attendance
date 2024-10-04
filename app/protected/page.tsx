@@ -12,18 +12,90 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { ChevronDownIcon, AlertCircle, Upload, Loader2 } from 'lucide-react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardDescription } from "@/components/ui/card"
 import { ProcessedConversation, RawConversation, processConversations } from '@/types/conversations';
 import { Database } from '@/database.types'
 import { useToast } from "@/hooks/use-toast"
+import { PlusIcon } from '@/components/icons';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+
+const statusMapping = {
+  action_needed: "Action Needed",
+  awating_message_approval: "Awaiting Approval",
+  in_progress: "In Progress",
+  completed: "Completed",
+};
+
+type StatusKey = keyof typeof statusMapping;
+type FilterOption = StatusKey | 'all';
+const filterOptions: FilterOption[] = ['all', ...Object.keys(statusMapping) as StatusKey[]];
+
+const rfaOptions = [
+  "Excused - Sick",
+  "Excused - Appointment",
+  "Excused - Travel",
+  "Excused - Family emergency",
+  "Excused - Bereavement",
+  "Excused - Religious observance",
+  "Excused - School-approved activity",
+  "Excused - Weather ornatural disaster",
+  "Excused - Mental health day",
+  "Excused - Therapy or counseling appointment",
+  "Excused - College visit",
+  "Excused - Military duty (for family member)",
+  "Excused - Cultural observance",
+  "Excused - Other",
+  "Unexcused - Sick (non-approved)",
+  "Unexcused - Travel (non-approved)",
+  "Unexcused - Overslept",
+  "Unexcused - Transportation issues",
+  "Unexcused - Skipping class",
+  "Unexcused - Family vacation (non-approved)",
+  "Unexcused - Work",
+  "Unexcused - Forgot to attend online class",
+  "Unexcused - Technology issues",
+  "Unexcused - Misunderstanding of schedule",
+  "Unexcused - Other"
+];
 
 export default function Conversations() {
   const [conversations, setConversations] = useState<ProcessedConversation[]>([]);
+  const [filteredConversations, setFilteredConversations] = useState<ProcessedConversation[]>([]);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [activeFilter, setActiveFilter] = useState<FilterOption>("all");
   const supabase = createClientComponentClient<Database>()
   const { toast } = useToast()
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (activeFilter === 'all') {
+      setFilteredConversations(conversations);
+    } else {
+      setFilteredConversations(conversations.filter(conv => conv.status === activeFilter));
+    }
+  }, [activeFilter, conversations]);
+
+  const getStatusCounts = () => {
+    const counts = {
+      awating_message_approval: 0,
+      action_needed: 0,
+      in_progress: 0,
+      completed: 0
+    };
+    conversations.forEach(conv => {
+      counts[conv.status]++;
+    });
+    return counts;
+  };
+
+  const statusCounts = getStatusCounts();
+
+  const handleFilterClick = (filter: FilterOption) => {
+    setActiveFilter(filter);
+  };
 
   useEffect(() => {
     fetchConversations()
@@ -104,6 +176,50 @@ export default function Conversations() {
     }
   }
 
+  const handleStatusChange = async (conversationId: string, newStatus: StatusKey) => {
+    const { error } = await supabase
+      .from('conversations')
+      .update({ status: newStatus })
+      .eq('id', conversationId);
+
+    if (error) {
+      console.error('Error updating conversation status:', error);
+      toast({
+        title: "Error",
+        description: "Failed to update conversation status. Please try again.",
+        variant: "destructive",
+      });
+    } else {
+      toast({
+        title: "Success",
+        description: "Conversation status updated successfully.",
+      });
+      fetchConversations(); // Refresh the conversations list
+    }
+  };
+
+  const handleRfaChange = async (conversationId: string, newRfa: string) => {
+    const { error } = await supabase
+      .from('conversations')
+      .update({ rfa: newRfa })
+      .eq('id', conversationId);
+
+    if (error) {
+      console.error('Error updating conversation RFA:', error);
+      toast({
+        title: "Error",
+        description: "Failed to update reason for absence. Please try again.",
+        variant: "destructive",
+      });
+    } else {
+      toast({
+        title: "Success",
+        description: "Reason for absence updated successfully.",
+      });
+      fetchConversations(); // Refresh the conversations list
+    }
+  };
+
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     setSelectedFile(file || null);
@@ -148,6 +264,8 @@ export default function Conversations() {
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
+
+      setIsDialogOpen(false);
     } catch (error) {
       console.error('Upload failed:', error);
       toast({
@@ -163,53 +281,74 @@ export default function Conversations() {
   return (
     <div className='flex flex-col p-6'>
       {/* Header */}
-      <div className='flex flex-col gap-2 mb-6'>
+      <div className='flex flex-col gap-4'>
         <div className='flex flex-row flex-1 justify-between'>
-          <h1 className='text-3xl'>Conversations</h1>
+          <div className='flex flex-row gap-4'>
+            <h1 className='text-3xl'>Conversations</h1>
+            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+              <DialogTrigger asChild>
+                <Button variant="secondary" className='rounded-full font-normal flex flex-row gap-2'>
+                  <PlusIcon />Create Conversations
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Upload Attendance Report</DialogTitle>
+                  <DialogDescription>
+                    Upload a CSV file to initiate conversations based on student absences.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="flex items-center gap-4">
+                  <Input
+                    type="file"
+                    accept=".csv"
+                    onChange={handleFileChange}
+                    ref={fileInputRef}
+                    className="flex-grow"
+                    aria-label="Select CSV file"
+                    disabled={isUploading}
+                  />
+                  <Button onClick={handleUpload} disabled={!selectedFile || isUploading}>
+                    {isUploading ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Uploading
+                      </>
+                    ) : (
+                      <>
+                        <Upload className="w-4 h-4 mr-2" />
+                        Upload
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+          </div>
           {/* Search bar */}
           <Input className='rounded-full bg-secondary max-w-80 border-none' placeholder='Search' />
         </div>
         {/* Filters */}
-        <div className='flex flex-row gap-2'>
-          <Button variant='secondary' className='rounded-full border-none font-normal'>In Progress</Button>
-          <Button variant='secondary' className='rounded-full border-none font-normal'>Action Needed</Button>
-          <Button variant='secondary' className='rounded-full border-none font-normal'>Completed</Button>
-        </div>
-      </div>
-      {/* Upload Report Banner */}
-      <Card className="mb-6 bg-accent">
-        <CardHeader>
-          <CardTitle className='text-md font-medium'>Upload a CSV file to initiate conversations based on student absences.</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center gap-4">
-            <Input
-              type="file"
-              accept=".csv"
-              onChange={handleFileChange}
-              ref={fileInputRef}
-              className="flex-grow"
-              aria-label="Select CSV file"
-              disabled={isUploading}
-            />
-            <Button onClick={handleUpload} disabled={!selectedFile || isUploading}>
-              {isUploading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Uploading
-                </>
-              ) : (
-                <>
-                  <Upload className="w-4 h-4 mr-2" />
-                  Upload
-                </>
+        <div className='flex flex-row w-full border-b border-border mb-2'>
+          {filterOptions.map((filter) => (
+            <Button
+              key={filter}
+              variant='ghost'
+              className={`rounded-none font-normal px-4 py-2 ${activeFilter === filter ? 'border-b-2 border-black' : 'border-b-2 border-transparent'}`}
+              onClick={() => handleFilterClick(filter)}
+            >
+              {filter === 'all' ? 'All' : statusMapping[filter]}
+              {(filter === 'awating_message_approval' || filter === 'action_needed') && statusCounts[filter] > 0 && (
+                <span className="ml-2 w-[22px] h-[22px] items-center bg-[#F5EE9E] rounded-md px-2 py-1 text-xs">
+                  {statusCounts[filter]}
+                </span>
               )}
             </Button>
-          </div>
-        </CardContent>
-      </Card>
+          ))}
+        </div>
+      </div>
       {/* Table */}
-      {conversations.length > 0 ? (
+      {filteredConversations.length > 0 ? (
         <Table>
           <TableHeader>
             <TableRow>
@@ -221,7 +360,7 @@ export default function Conversations() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {conversations.map((conversation) => (
+            {filteredConversations.map((conversation) => (
               <TableRow key={conversation.id}>
                 <TableCell>
                   <div className="flex items-center">
@@ -230,7 +369,7 @@ export default function Conversations() {
                     </div>
                     <div>
                       <div className='flex flex-row gap-2 items-center'>
-                        <div className="font-semibold truncate">{conversation.guardian.first_name} {conversation.guardian.last_name}</div>
+                        <div className="font-medium truncate">{conversation.guardian.first_name} {conversation.guardian.last_name}</div>
                         <div className="text-sm bg-secondary py-1 px-2 rounded-md">Guardian</div>
                       </div>
                       <div className="text-sm truncate max-w-80">{conversation.latestMessage?.content}</div>
@@ -240,17 +379,53 @@ export default function Conversations() {
                 <TableCell className='truncate'>{conversation.studentId}</TableCell>
                 <TableCell className='truncate'>{conversation.topic}</TableCell>
                 <TableCell>
-                  <div className="flex items-center">
-                    <AlertCircle className="w-4 h-4 mr-2 text-yellow-500" />
-                    <span className='truncate'>{conversation.status}</span>
-                    <ChevronDownIcon className="w-4 h-4 ml-2" />
-                  </div>
+                  <Select
+                    defaultValue={conversation.status}
+                    onValueChange={(value: StatusKey) => handleStatusChange(conversation.id, value)}
+                  >
+                    <SelectTrigger className="w-[180px] border-none bg-secondary">
+                      <SelectValue placeholder="Select status" />
+                    </SelectTrigger>
+                    <SelectContent className=''>
+                      {Object.entries(statusMapping).map(([key, value]) => (
+                        <SelectItem key={key} value={key}>
+                          {value}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </TableCell>
                 <TableCell>
-                  <div className="flex items-center">
-                    <span className='truncate'>{conversation.rfa || 'N/A'}</span>
-                    <ChevronDownIcon className="w-4 h-4 ml-2" />
-                  </div>
+                  <Select
+                    defaultValue={conversation.rfa || ''}
+                    onValueChange={(value) => handleRfaChange(conversation.id, value)}
+                  >
+                    <SelectTrigger className="w-[250px]">
+                      <div
+                        className="rounded-md px-2 py-1 -ml-1 mr-1 w-fit truncate"
+                        style={{
+                          backgroundColor: conversation.rfa?.startsWith('Excused') ? '#FFEBDD' :
+                            conversation.rfa?.startsWith('Unexcused') ? '#FFD5E1' :
+                              'transparent'
+                        }}
+                      >
+                        <SelectValue placeholder="-" />
+                      </div>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="-">
+                        <span className="text-muted-foreground">-</span>
+                      </SelectItem>
+                      {rfaOptions.map((option) => (
+                        <SelectItem
+                          key={option}
+                          value={option}
+                        >
+                          {option}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </TableCell>
               </TableRow>
             ))}
@@ -258,7 +433,7 @@ export default function Conversations() {
         </Table>
       ) : (
         <Card className='p-6'>
-          <CardDescription>No conversations found. Try uploading an attendance report</CardDescription>
+          <CardDescription>No conversations found. Click "Create Conversations" to upload an attendance report</CardDescription>
         </Card>
       )}
     </div>

@@ -325,8 +325,6 @@ export default function Conversations() {
               </DialogContent>
             </Dialog>
           </div>
-          {/* Search bar */}
-          <Input className='rounded-full bg-secondary max-w-80 border-none' placeholder='Search' />
         </div>
         {/* Filters */}
         <div className='flex flex-row w-full border-b border-border mb-2'>
@@ -349,7 +347,7 @@ export default function Conversations() {
       </div>
       {/* Table */}
       {filteredConversations.length > 0 ? (
-        <Table>
+        <Table className='overflow-x-scroll'>
           <TableHeader>
             <TableRow>
               <TableHead>Latest Message</TableHead>
@@ -380,7 +378,7 @@ export default function Conversations() {
                 <TableCell className='truncate'>{conversation.topic}</TableCell>
                 <TableCell>
                   <Select
-                    defaultValue={conversation.status}
+                    value={conversation.status}
                     onValueChange={(value: StatusKey) => handleStatusChange(conversation.id, value)}
                   >
                     <SelectTrigger className="w-[180px] border-none bg-secondary">
@@ -397,7 +395,7 @@ export default function Conversations() {
                 </TableCell>
                 <TableCell>
                   <Select
-                    defaultValue={conversation.rfa || ''}
+                    value={conversation.rfa || ''}
                     onValueChange={(value) => handleRfaChange(conversation.id, value)}
                   >
                     <SelectTrigger className="w-[250px]">

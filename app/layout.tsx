@@ -52,7 +52,8 @@ export default async function RootLayout({
   children: React.ReactNode;
 }) {
   const supabase = createServerComponentClient({ cookies });
-  const { data: { session } } = await supabase.auth.getSession();
+  const { data, error } = await supabase.auth.getSession()
+  console.log("Session:", data)
 
   return (
     <html lang="en" className={abcGinto.className} suppressHydrationWarning>
@@ -64,13 +65,13 @@ export default async function RootLayout({
           disableTransitionOnChange
         >
           <main className="min-h-screen flex flex-row h-full">
-            {session ? (
+            {data ? (
               <>
                 {/* Sidebar */}
                 <nav className="flex flex-col justify-between items-start border-r border-b-foreground/10 bg-accent">
                   {/* top */}
                   <div className="flex flex-col p-6 text-sm gap-6 w-full">
-                    <div className="flex gap-2 items-center font-semibold">
+                    <div className="flex gap-1 items-center font-medium text-lg">
                       <MountainIcon />
                       <Link href={"/"}>Sherpa</Link>
                     </div>

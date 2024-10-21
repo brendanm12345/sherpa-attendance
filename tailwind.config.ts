@@ -54,9 +54,9 @@ const config = {
         },
       },
       borderRadius: {
-        lg: "var(--radius)",
-        md: "calc(var(--radius) - 2px)",
-        sm: "calc(var(--radius) - 4px)",
+        sm: "var(--radius)",
+        md: "calc(var(--radius) + 4px)",
+        lg: "calc(var(--radius) + 4px)",
       },
       keyframes: {
         "accordion-down": {
@@ -72,6 +72,14 @@ const config = {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
       },
+      fontSize: {
+        sm: '12px',
+        md: '16px',
+        lg: '22px',
+        xl: '28px',
+        '2xl': '32px',
+        '3xl': '36px',
+      }
     },
   },
   plugins: [require("tailwindcss-animate")],

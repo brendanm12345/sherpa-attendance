@@ -1,3 +1,7 @@
+/*
+Here is the code from the demo. Feel free to reference or pull code from here.
+*/
+
 "use client";
 import { useEffect, useState, useRef } from 'react'
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs"
@@ -13,7 +17,7 @@ import {
 } from "@/components/ui/table"
 import { ChevronDownIcon, AlertCircle, Upload, Loader2 } from 'lucide-react'
 import { Card, CardDescription } from "@/components/ui/card"
-import { ProcessedConversation, RawConversation, processConversations } from '@/types/conversations';
+import { ProcessedConversation, RawConversation, processConversations } from '@/utils/types';
 import { Database } from '@/database.types'
 import { useToast } from "@/hooks/use-toast"
 import { PlusIcon } from '@/components/icons';

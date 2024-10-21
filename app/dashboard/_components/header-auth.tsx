@@ -1,16 +1,16 @@
 import { signOutAction } from "@/app/actions";
 import { hasEnvVars } from "@/utils/supabase/check-env-vars";
 import Link from "next/link";
-import { Badge } from "./ui/badge";
-import { Button } from "./ui/button";
+import { Badge } from "../../../components/ui/badge";
+import { Button } from "../../../components/ui/button";
 import { createClient } from "@/utils/supabase/server";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "./ui/dropdown-menu";
-import { Avatar, AvatarFallback } from "./ui/avatar";
+} from "../../../components/ui/dropdown-menu";
+import { Avatar, AvatarFallback } from "../../../components/ui/avatar";
 import { ChevronDown } from "lucide-react";
 
 export default async function AuthButton() {
@@ -62,15 +62,15 @@ export default async function AuthButton() {
 
     return (
       <DropdownMenu>
-        <DropdownMenuTrigger asChild>
+        <DropdownMenuTrigger asChild className="p-0 bg-transparent border-none">
           <Button variant="ghost" className="p-0 h-auto">
-            <div className="flex items-center gap-2">
-              <Avatar className="h-8 w-8">
-                <AvatarFallback>{initials}</AvatarFallback>
-              </Avatar>
-              <span className="text-sm truncate">{user.email}</span>
-              <ChevronDown className="h-4 w-4 text-muted-foreground" />
-            </div>
+          <div className="flex items-center gap-1">
+            <Avatar className="h-7 w-7">
+              <AvatarFallback className="text-xs">{initials}</AvatarFallback>
+            </Avatar>
+            <span className="text-sm truncate">{user.email}</span>
+            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+          </div>
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">

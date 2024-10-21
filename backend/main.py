@@ -13,6 +13,7 @@ from datetime import date
 import os
 from dotenv import load_dotenv
 from openai import OpenAI
+from enum import Enum
 import csv
 from io import StringIO
 
@@ -82,12 +83,22 @@ class Message(BaseModel):
     was_downgraded: Optional[bool] = None
     sendblue_message_handle: Optional[str] = None
 
+class ConversationStatus(str, Enum):
+    IN_PROGRESS = "in_progress"
+    ACTION_NEEDED = "action_needed"
+    COMPLETED = "completed"
+    AWAITING_MESSAGE_APPROVAL = "awaiting_message_approval"
+
+class RecommendedAction(str, Enum):
+    MARK_AS_COMPLETED = "mark_as_completed"
+    ATTENDANCE_OFFICER_TAKE_OVER = "attendance_officer_take_over"
+
 
 class AIResponseSchema(BaseModel):
     rfa: Optional[Literal[
         None,
         "Excused - Sick",
-        "Excused - Medical appointment",
+        "Excused - appointment",
         "Excused - Travel",
         "Excused - Family emergency",
         "Excused - Bereavement",
@@ -112,12 +123,13 @@ class AIResponseSchema(BaseModel):
         "Unexcused - Misunderstanding of schedule"
     ]] = Field(None, description="Reason for absence, if clear.")
 
-    next_action: Literal[
-        "In Progress - AI Assistant still searching for RFA",
-        "Action Needed - pass to specialist",
-        "Action Needed - pass to attendance officer",
-        "Action Needed - review & mark as completed"
-    ] = Field(..., description="The next action to be taken in the conversation")
+    conversation_status: Literal[ConversationStatus.IN_PROGRESS, ConversationStatus.ACTION_NEEDED] = Field(
+        ..., description="The status of the conversation"
+    )
+
+    recommended_action: Optional[Literal[RecommendedAction.MARK_AS_COMPLETED, RecommendedAction.ATTENDANCE_OFFICER_TAKE_OVER]] = Field(
+        None, description="The recommended action if the status is action_needed"
+    )
 
     response_content: str = Field(...,
                                   description="The response content to send to the recipient")
@@ -271,8 +283,10 @@ async def ai_process_conversation(conversation_history: List[dict], conversation
     prompt = f"""
     Given the following conversation history and participant roles, please analyze the conversation and provide:
     1. A reason for absence (RFA) if one has been made clear. If not clear, respond with null.
-    2. A next action to be taken in this conversation (either 'Action Needed' or 'In Progress' category).
-    3. A text response to send to the recipient based on the above choices.
+    2. A an update to the conversation status if needed. This should be chosen from Literal["in_progress", "action_needed"]
+    3. (optional) IF the updated conversation_status is "action_needed" THEN choose a recommended_action (sort of like a 
+    next step) BASED on the conversation history. Chosen from Optional[Literal["mark_as_completed", "attendance_officer_take_over"]]
+    4. A text response to send to the recipient based on the above choices.
 
     Conversation History:
     {json.dumps(conversation_history)}
@@ -283,17 +297,18 @@ async def ai_process_conversation(conversation_history: List[dict], conversation
     Please respond in JSON format with the following structure:
     {{
         "rfa": "excused - sick" or null,
-        "next_action": "Action Needed - review & mark as completed",
+        "convsersation_status": "action_needed",
+        "recommended_action": "mark_as_completed" or null,
         "response_content": "I'm sorry to hear that. Could you provide more details about the illness?"
     }}
 
     Here are some helpful tips and guidelines:
     - Be friendly and empathetic in your responses.
-    - If you decide that the rfa is "excused - [anything]", the next_action should typically be "Action Needed - review & mark as completed".
-    - If the guardian provides a clear rfa but you're unsure whether it should be excused or unexcused, you can set the next_action to "Action Needed - pass to attendance officer".
-    - If you decide to escalate the conversation to the attendance officer or a specialist, you should let the guardian know that you will let the attendance officer / specialist know and that they will be in touch soon.
+    - If you decide that the rfa is "excused - [anything]", the "recommended_action" should typically be "mark_as_completed".
+    - If the guardian provides a clear rfa but you're unsure whether it should be excused or unexcused, you can choose one and set the "recommended_action" to "attendance_officer_take_over".
+    - If you decide to escalate the conversation to the attendance officer, you should let the guardian know that you will let the attendance officer know and that they will be in touch soon.
     - If users ask about how to inform the school about future absences, you can instruct them to send a text message to this phone number.
-    - Please be pretty concise in the response_content since these will be sent as text messages and avoid repeating yourself too much.
+    - Please be pretty concise in the "response_content" since these will be sent as text messages and avoid repeating yourself too much.
     """
 
     print(f"Prompt: {prompt}")
@@ -444,10 +459,8 @@ async def process_response(payload: dict):
 
     if not sender_phone or not to_phone or not message_content or not sendblue_message_handle:
         raise HTTPException(status_code=400, detail="Invalid webhook payload")
-
-    print("Sender phone: " + sender_phone)
+    
     normalized_sender_phone = sender_phone.lstrip('+')
-    print("Normalized sender phone: " + normalized_sender_phone)
 
     # Find the guardian based on the sender's phone number
     guardian = supabase.table("guardians").select("id, school_id").eq(
@@ -485,7 +498,7 @@ async def process_response(payload: dict):
     if not conversation.data:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    if not conversation.data.get("rfa") or conversation.data.get("status").startswith("Action Needed"):
+    if not conversation.data.get("rfa") or conversation.data.get("status") == ConversationStatus.ACTION_NEEDED:
         """
         If the conversation does not have an RFA, this means the AI should re-consider the conversation with it's new message and see it can label it with an RFA and next action.
         """
@@ -499,11 +512,12 @@ async def process_response(payload: dict):
         print("Received AI response:" + str(ai_response))
 
         # Update the conversation with the new RFA and status in DB
-        update_data = {"status": "In Progress"}
-        if ai_response.rfa:
-            update_data["rfa"] = ai_response.rfa
-        if ai_response.next_action.startswith("Action Needed"):
-            update_data["status"] = ai_response.next_action
+        update_data = {
+            "status": ai_response.conversation_status,
+            "rfa": ai_response.rfa
+        }
+        if ai_response.conversation_status == ConversationStatus.ACTION_NEEDED:
+            update_data["recommended_action"] = ai_response.recommended_action
 
         supabase.table("conversations").update(
             update_data).eq("id", conversation_id).execute()

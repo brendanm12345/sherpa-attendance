@@ -15,9 +15,12 @@ export type Database = {
           created_at: string
           guardian_id: string
           id: string
+          recommended_action:
+            | Database["public"]["Enums"]["recommended_actions"]
+            | null
           rfa: string | null
           school_id: string
-          status: string
+          status: Database["public"]["Enums"]["conversation_status"]
           student_id: string
           topic: string
           updated_at: string
@@ -28,9 +31,12 @@ export type Database = {
           created_at?: string
           guardian_id: string
           id?: string
+          recommended_action?:
+            | Database["public"]["Enums"]["recommended_actions"]
+            | null
           rfa?: string | null
           school_id: string
-          status: string
+          status: Database["public"]["Enums"]["conversation_status"]
           student_id: string
           topic: string
           updated_at?: string
@@ -41,9 +47,12 @@ export type Database = {
           created_at?: string
           guardian_id?: string
           id?: string
+          recommended_action?:
+            | Database["public"]["Enums"]["recommended_actions"]
+            | null
           rfa?: string | null
           school_id?: string
-          status?: string
+          status?: Database["public"]["Enums"]["conversation_status"]
           student_id?: string
           topic?: string
           updated_at?: string
@@ -348,7 +357,12 @@ export type Database = {
       [_ in never]: never
     }
     Enums: {
-      conversation_status: "in_progress" | "action_needed" | "completed"
+      conversation_status:
+        | "in_progress"
+        | "action_needed"
+        | "completed"
+        | "awaiting_message_approval"
+      recommended_actions: "mark_as_completed" | "attendance_officer_take_over"
       type: "guardian" | "admin"
       user_role:
         | "district_super_admin"

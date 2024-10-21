@@ -4,6 +4,14 @@ import Link from "next/link";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { createClient } from "@/utils/supabase/server";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu";
+import { Avatar, AvatarFallback } from "./ui/avatar";
+import { ChevronDown } from "lucide-react";
 
 export default async function AuthButton() {
   const {
@@ -46,19 +54,39 @@ export default async function AuthButton() {
       </>
     );
   }
-  return user ? (
-    <div className="flex flex-col gap-2 w-48">
-      <div className="gap-1">
-        <p className="truncate">Hey,</p>
-        <p className="truncate">{user.email}!</p>
-      </div>
-      <form action={signOutAction}>
-        <Button type="submit" variant={"outline"}>
-          Sign out
-        </Button>
-      </form>
-    </div>
-  ) : (
+  if (user) {
+    const initials = user.email
+      ?.split('@')[0]
+      .slice(0, 2)
+      .toUpperCase();
+
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" className="p-0 h-auto">
+            <div className="flex items-center gap-2">
+              <Avatar className="h-8 w-8">
+                <AvatarFallback>{initials}</AvatarFallback>
+              </Avatar>
+              <span className="text-sm truncate">{user.email}</span>
+              <ChevronDown className="h-4 w-4 text-muted-foreground" />
+            </div>
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem asChild>
+            <form action={signOutAction} className="w-full">
+              <button type="submit" className="w-full text-left">
+                Sign out
+              </button>
+            </form>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  }
+
+  return (
     <div className="flex gap-2">
       <Button asChild size="sm" variant={"outline"}>
         <Link href="/sign-in">Sign in</Link>

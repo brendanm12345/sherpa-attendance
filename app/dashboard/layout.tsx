@@ -22,7 +22,7 @@ export default async function DashboardLayout({
                         Crystal Springs Middle School
                     </h2>
                 </div>
-                <ThemeSwitcher />
+                {/* <ThemeSwitcher /> */} {/* Jonah: this is distracting. can put in later */}
             </header>
             
             {/* Content area with sidebar and main content using responsive grid */}

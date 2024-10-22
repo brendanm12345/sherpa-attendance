@@ -21,7 +21,7 @@ export default function tabs() {
                         variant={pathname === "/dashboard" ? "secondary" : "ghost"}
                         className="w-full"
                     >
-                        <Link href={"/dashboard"} className="flex flex-row gap-2 w-full items-center font-normal">
+                        <Link href={"/dashboard/conversations"} className="flex flex-row gap-2 w-full items-center font-normal">
                             <ConversationIcon />
                             Conversations
                         </Link>

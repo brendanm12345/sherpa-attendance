@@ -48,4 +48,5 @@ export const dummyConversation2: Conversation = {
   chat_history: dummyConversationHistory2,
 };
 
-export const dummyConversations: Conversation[] = [dummyConversation1, dummyConversation2];
+const dummyConversations: Conversation[] = [dummyConversation1, dummyConversation2];
+export default dummyConversations;

@@ -1,8 +1,19 @@
-/*
-Here is the code from the demo. Feel free to reference or pull code from here.
-*/
-
 "use client";
+
+
+import { Conversation } from '@/lib/types'
+import ConversationPane from '@/app/dashboard/_components/conversation-pane'
+import dummyConversations from '@/lib/dummy_data';
+
+export default function Page() {
+  const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(dummyConversations[0]);
+  return (
+    <ConversationPane conversation={selectedConversation ? selectedConversation : null} />
+  )
+}
+
+
+
 import { useEffect, useState, useRef } from 'react'
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs"
 import { Button } from '@/components/ui/button'
@@ -23,6 +34,7 @@ import { useToast } from "@/hooks/use-toast"
 import { PlusIcon } from '@/components/icons';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { dummy } from '@/app/dashboard/_components/conversations';
 
 const statusMapping = {
   action_needed: "Action Needed",
@@ -63,7 +75,7 @@ const rfaOptions = [
   "Unexcused - Other"
 ];
 
-export default function Conversations() {
+export function Conversations() {
   const [conversations, setConversations] = useState<ProcessedConversation[]>([]);
   const [filteredConversations, setFilteredConversations] = useState<ProcessedConversation[]>([]);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);

@@ -2,6 +2,8 @@ import { MountainIcon } from "@/components/icons";
 import Sidebar from "@/app/dashboard/_components/sidebar";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import Link from "next/link";
+import ConversationPreviewsColumn from "@/app/dashboard/_components/conversation-previews-column";
+import dummyConversations from "@/lib/dummy_data";
 
 export default async function DashboardLayout({
     children,
@@ -26,7 +28,7 @@ export default async function DashboardLayout({
             </header>
             
             {/* Content area with sidebar and main content using responsive grid */}
-            <div className="flex-1 flex">
+            <div className="flex-1 flex"> {/* Jonah: flex-1 doesn't do anything because it's not the child of a flexbox? */}
                 {/* Sidebar */}
                 <aside className="w-64 flex-shrink-0">
                     <Sidebar />
@@ -34,7 +36,11 @@ export default async function DashboardLayout({
                 
                 {/* Main content */}
                 <main className="flex-grow overflow-hidden">
-                    {children}
+                    <div className="flex flex-row">
+                        <ConversationPreviewsColumn conversations={dummyConversations} />
+                        {children}
+                    </div>
+                    
                 </main>
             </div>
         </>

@@ -54,11 +54,11 @@ export default function ConversationPreviewsColumn({ conversations }: { conversa
               onClick={() => handleFilterClick(filter)}
             >
               {filter === 'all' ? 'All' : statusMapping[filter]}
-              {(filter === 'awaiting_message_approval' || filter === 'action_needed') && statusCounts[filter] > 0 && (
+              {/* {(filter === 'awaiting_message_approval' || filter === 'action_needed') && statusCounts[filter] > 0 && (
                 <span className="ml-2 w-[22px] h-[22px] items-center bg-[#F5EE9E] rounded-md px-2 py-1 text-xs">
                   {statusCounts[filter]}
                 </span>
-              )}
+              )} */}
             </Button>
           ))}
         </div>
